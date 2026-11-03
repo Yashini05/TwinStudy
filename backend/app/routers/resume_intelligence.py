@@ -1,9 +1,7 @@
 import json
-import os
-import re
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 from pypdf import PdfReader
 from docx import Document
@@ -12,11 +10,17 @@ from ..models import CareerCertification, CareerExperience, CareerProfile, Caree
 from ..resume_intelligence import extract_job, extract_resume, match_job
 from ..schemas import JobDescriptionInput, PreparationStatusInput, ResumeConfirmInput
 from ..security import current_student
+from ..storage import DocumentStorage, StorageConfigurationError, StoredObject, safe_original_name
 
 router = APIRouter(prefix="/intelligence", tags=["resume and jobs"])
-UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
 MAX_UPLOAD = 5 * 1024 * 1024
+
+
+def storage() -> DocumentStorage:
+    try:
+        return DocumentStorage()
+    except StorageConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 def read_document(data: bytes, suffix: str) -> str:
@@ -38,12 +42,21 @@ async def upload_resume(file: UploadFile = File(...), student: Student = Depends
     try: text = read_document(data, suffix)
     except Exception as exc: raise HTTPException(422, f"Could not parse resume: {exc}") from exc
     if not text.strip(): raise HTTPException(422, "Resume contains no readable text")
-    stored = f"{uuid.uuid4().hex}{suffix}"
-    (UPLOAD_DIR / stored).write_bytes(data)
-    item = ResumeDocument(student_id=student.id, original_name=file.filename or "resume", stored_name=stored,
+    original_name = safe_original_name(file.filename)
+    stored = f"students/{student.id}/resumes/{uuid.uuid4().hex}{suffix}"
+    document_storage = storage()
+    stored_object = document_storage.put(data, stored, file.content_type or "application/octet-stream")
+    item = ResumeDocument(student_id=student.id, original_name=original_name, stored_name=stored,
+                          storage_backend=stored_object.backend,
+                          document_data=data if stored_object.backend == "database" else None,
                           content_type=file.content_type or "application/octet-stream", extracted_text=text[:100000],
                           extracted_json=json.dumps(extract_resume(text)))
-    db.add(item); db.commit(); db.refresh(item)
+    try:
+        db.add(item); db.commit(); db.refresh(item)
+    except Exception:
+        db.rollback()
+        document_storage.delete(stored_object)
+        raise
     return {"id": item.id, "original_name": item.original_name, "extracted": json.loads(item.extracted_json), "confirmed": item.confirmed}
 
 
@@ -58,6 +71,33 @@ def confirm_resume(item_id: int, payload: ResumeConfirmInput, student: Student =
     item = db.query(ResumeDocument).filter_by(id=item_id, student_id=student.id).first()
     if not item: raise HTTPException(404, "Resume not found")
     item.confirmed = payload.confirmed; db.commit(); return {"id": item.id, "confirmed": item.confirmed}
+
+
+@router.get("/resumes/{item_id}/download")
+def download_resume(item_id: int, student: Student = Depends(current_student), db: Session = Depends(get_db)):
+    item = db.query(ResumeDocument).filter_by(id=item_id, student_id=student.id).first()
+    if not item: raise HTTPException(404, "Resume not found")
+    try:
+        data = storage().get(StoredObject(item.stored_name, item.storage_backend), item.document_data)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Resume file is unavailable") from exc
+    return Response(data, media_type=item.content_type, headers={"Content-Disposition": f'attachment; filename="{safe_original_name(item.original_name)}"'})
+
+
+@router.delete("/resumes/{item_id}", status_code=204)
+def delete_resume(item_id: int, student: Student = Depends(current_student), db: Session = Depends(get_db)):
+    item = db.query(ResumeDocument).filter_by(id=item_id, student_id=student.id).first()
+    if not item: raise HTTPException(404, "Resume not found")
+    document_storage = storage()
+    stored = StoredObject(item.stored_name, item.storage_backend)
+    try:
+        document_storage.delete(stored)
+        db.delete(item)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return Response(status_code=204)
 
 
 @router.post("/jobs", status_code=201)
@@ -78,9 +118,22 @@ async def upload_job(file: UploadFile = File(...), company: str = Form(...), tit
     try: text = read_document(data, suffix)
     except Exception as exc: raise HTTPException(422, f"Could not parse job description: {exc}") from exc
     if len(text.strip()) < 30: raise HTTPException(422, "Job description contains insufficient readable text")
+    original_name = safe_original_name(file.filename)
+    stored = f"students/{student.id}/jobs/{uuid.uuid4().hex}{suffix}"
+    document_storage = storage()
+    stored_object = document_storage.put(data, stored, file.content_type or "application/octet-stream")
     item = JobDescription(student_id=student.id, company=company, title=title, experience_level=experience_level,
-                          source_text=text[:100000], extracted_json=json.dumps(extract_job(text)))
-    db.add(item); db.commit(); db.refresh(item)
+                          source_text=text[:100000], source_original_name=original_name,
+                          source_content_type=file.content_type or "application/octet-stream",
+                          source_object_key=stored_object.key, source_storage_backend=stored_object.backend,
+                          source_document_data=data if stored_object.backend == "database" else None,
+                          extracted_json=json.dumps(extract_job(text)))
+    try:
+        db.add(item); db.commit(); db.refresh(item)
+    except Exception:
+        db.rollback()
+        document_storage.delete(stored_object)
+        raise
     return {"id": item.id, "company": item.company, "title": item.title, "extracted": json.loads(item.extracted_json)}
 
 
@@ -88,6 +141,36 @@ async def upload_job(file: UploadFile = File(...), company: str = Form(...), tit
 def jobs(student: Student = Depends(current_student), db: Session = Depends(get_db)):
     return [{"id": item.id, "company": item.company, "title": item.title, "experience_level": item.experience_level,
              "created_at": item.created_at, "extracted": json.loads(item.extracted_json)} for item in db.query(JobDescription).filter_by(student_id=student.id).order_by(JobDescription.created_at.desc()).all()]
+
+
+@router.get("/jobs/{job_id}/download")
+def download_job(job_id: int, student: Student = Depends(current_student), db: Session = Depends(get_db)):
+    item = db.query(JobDescription).filter_by(id=job_id, student_id=student.id).first()
+    if not item or not item.source_object_key: raise HTTPException(404, "Job document not found")
+    try:
+        data = storage().get(StoredObject(item.source_object_key, item.source_storage_backend or "local"),
+                             item.source_document_data)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Job document is unavailable") from exc
+    return Response(data, media_type=item.source_content_type or "application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{safe_original_name(item.source_original_name)}"'})
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+def delete_job(job_id: int, student: Student = Depends(current_student), db: Session = Depends(get_db)):
+    item = db.query(JobDescription).filter_by(id=job_id, student_id=student.id).first()
+    if not item: raise HTTPException(404, "Job description not found")
+    document_storage = storage() if item.source_object_key else None
+    try:
+        if document_storage and item.source_object_key:
+            document_storage.delete(StoredObject(item.source_object_key, item.source_storage_backend or "local"))
+        db.query(JobComparison).filter_by(job_id=item.id, student_id=student.id).delete()
+        db.query(JobPreparationTask).filter_by(job_id=item.id, student_id=student.id).delete()
+        db.delete(item); db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return Response(status_code=204)
 
 
 @router.post("/jobs/{job_id}/match")

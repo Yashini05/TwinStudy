@@ -1,8 +1,21 @@
 import os
 import uuid
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+import tempfile
+import atexit
+from pathlib import Path
+TEST_DB = Path(tempfile.gettempdir()) / f"twinstudy-api-test-{uuid.uuid4().hex}.db"
+os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 from fastapi.testclient import TestClient
 from app.main import app
+from app.db import engine
+
+
+def cleanup_test_db():
+    engine.dispose()
+    TEST_DB.unlink(missing_ok=True)
+
+
+atexit.register(cleanup_test_db)
 
 client = TestClient(app)
 

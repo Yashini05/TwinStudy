@@ -1,16 +1,16 @@
 from alembic import context
 from sqlalchemy import engine_from_config, pool
-from app.config import settings
+from app.config import settings, sqlalchemy_database_url
 from app.db import Base
 from app import models
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", sqlalchemy_database_url(settings.database_url))
 target_metadata = Base.metadata
 
 
 def run_migrations_offline():
-    context.configure(url=settings.database_url, target_metadata=target_metadata, literal_binds=True,
+    context.configure(url=sqlalchemy_database_url(settings.database_url), target_metadata=target_metadata, literal_binds=True,
                       dialect_opts={"paramstyle": "named"})
     with context.begin_transaction():
         context.run_migrations()

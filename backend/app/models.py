@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -20,6 +20,7 @@ class Student(Base):
     preferences = relationship("LearningPreference", back_populates="student", uselist=False, cascade="all, delete-orphan")
     goals = relationship("AcademicGoal", back_populates="student", cascade="all, delete-orphan")
     twins = relationship("DigitalTwinSnapshot", back_populates="student", cascade="all, delete-orphan")
+    __table_args__ = (UniqueConstraint("email", name="students_email_key"),)
 
 
 class Subject(Base):
@@ -113,6 +114,7 @@ class CareerProfile(Base):
     career_goals: Mapped[str | None] = mapped_column(Text, nullable=True)
     professional_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("student_id", name="career_profiles_student_id_key"),)
 
 
 class CareerSkill(Base):
@@ -201,6 +203,8 @@ class ResumeDocument(Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("students.id", ondelete="CASCADE"), index=True)
     original_name: Mapped[str] = mapped_column(String(255))
     stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    storage_backend: Mapped[str] = mapped_column(String(20), default="local")
+    document_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     content_type: Mapped[str] = mapped_column(String(120))
     extracted_text: Mapped[str] = mapped_column(Text)
     extracted_json: Mapped[str] = mapped_column(Text)
@@ -216,6 +220,11 @@ class JobDescription(Base):
     title: Mapped[str] = mapped_column(String(180))
     experience_level: Mapped[str] = mapped_column(String(40))
     source_text: Mapped[str] = mapped_column(Text)
+    source_original_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_storage_backend: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_document_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     extracted_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

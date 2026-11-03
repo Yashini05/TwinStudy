@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: twinstudy
+    runtime: python
+    buildCommand: npm --prefix frontend ci && npm --prefix frontend run build && python -m pip install -r backend/requirements.txt
+    releaseCommand: cd backend && alembic upgrade head
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: UPLOAD_DIR
+        value: uploads

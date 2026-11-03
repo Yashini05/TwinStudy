@@ -49,6 +49,58 @@ npm run dev
 
 Set `VITE_API_URL` in `frontend/.env` when the API is not at the default URL. API documentation is available at `http://localhost:8000/docs`.
 
+## Single-service production deployment
+
+The production frontend is built into `frontend/dist` and served by FastAPI from the same origin. API calls use the relative `/api` path in production, while local development continues to use the separate Vite and FastAPI servers.
+
+Build and start from the repository root on a Linux-based hosting service:
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+python -m pip install -r backend/requirements.txt
+cd backend
+alembic upgrade head
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+Configure the service with:
+
+- **Build command:** `npm --prefix frontend ci && npm --prefix frontend run build && python -m pip install -r backend/requirements.txt`
+- **Release/migration command:** `cd backend && alembic upgrade head`
+- **Start command:** `cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- **Health check path:** `/health`
+
+Required production environment variables:
+
+```text
+DATABASE_URL=postgresql+psycopg://<user>:<password>@<host>:<port>/<database>
+SECRET_KEY=<long-random-secret>
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+FRONTEND_ORIGIN=https://<your-public-domain>
+FRONTEND_ORIGINS=https://<your-public-domain>
+UPLOAD_DIR=/var/data/uploads
+```
+
+### Durable document storage
+
+Resume and uploaded job-description originals use a private storage adapter. Local development uses `UPLOAD_DIR`. Production stores the original bytes in PostgreSQL (`BYTEA`) so the application can run on Render Free without R2, a paid subscription, or a persistent Render disk. The 5 MB per-file limit protects the free database allocation; monitor Neon usage as documents accumulate.
+
+The following optional variables support an existing private R2 bucket, but they are not required for deployment and should remain unset when using Neon-backed storage:
+
+```text
+APP_ENV=production
+R2_ACCOUNT_ID=<cloudflare-account-id>
+R2_ACCESS_KEY_ID=<r2-access-key-id>
+R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
+R2_BUCKET_NAME=<private-bucket-name>
+R2_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+```
+
+With the default production configuration, PostgreSQL records store each document's private key, storage backend, and original bytes. Downloads and deletion require authentication and the owning student. Upload metadata and bytes commit atomically, and deleting the database row removes the stored bytes. `UPLOAD_DIR` remains available for local development and is ignored by Git. Database-backed storage is simple and genuinely free, but consumes Neon database storage and is not appropriate for unlimited large-file hosting.
+
+Do not set `VITE_API_URL` for the single-service build unless it is the public same-origin `/api` path. Never use a localhost URL in the production frontend.
+
 ## Verification
 
 ```powershell
