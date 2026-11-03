@@ -1,0 +1,46 @@
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node, Vite and frontend tooling
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+*.tsbuildinfo
+/package-lock.json
+
+# Local application data and uploaded/private files
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+backend/uploads/
+
+# Editors and operating-system files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.cursor/
+.DS_Store
+Thumbs.db
